@@ -15,6 +15,127 @@
 
 ## 🚀 시스템 아키텍처 (System Architecture)
 
+본 시스템은 단일 GPU 환경에서 멀티모달 모델의 효율적인 운용과 실시간 피드백을 위해 비동기 분산 처리 구조를 채택하였습니다.
+
+```mermaid
+graph TD
+    %% ==========================================
+    %% 1. 클라이언트 및 인프라
+    %% ==========================================
+    User["사용자 (Web UI)"] -->|1. 파일 및 질문 업로드| UI["index.html"]
+    UI -->|2. 분석 요청| API["FastAPI 서버<br/>(production_server.py)"]
+    UI -->|3. 엑셀 다운로드| ExcelEndPoint["POST /download_excel"]
+
+    subgraph Infrastructure ["시스템 인프라"]
+        API -->|Task 할당| Redis
+        Redis -->|Job 수행| Worker["Celery Worker"]
+        Worker -->|로그 업데이트| Redis
+    end
+
+    %% ==========================================
+    %% 2. 리포팅 시스템
+    %% ==========================================
+    subgraph Reporting ["리포팅"]
+        ExcelEndPoint --> DF["Pandas DataFrame"]
+        DF --> XL["OpenPyXL (서식 적용)"]
+        XL --> User
+    end
+
+    %% ==========================================
+    %% 3. AI 추론 파이프라인
+    %% ==========================================
+    subgraph AI_Inference ["AI 추론 파이프라인"]
+        Worker -->|입력 검증| Main["main.py"]
+        
+        %% [공통] VLM 이미지 분석 모듈
+        Main -->|이미지 존재 시| VLM_Init["메모리 최적화<br/>(unload_models)"]
+        VLM_Init -->|시각 추론| ImageAnal["image.py<br/>(AX4VL 모델)"]
+        
+        %% 라우터 (분기점)
+        Main --> Router{작업 유형 분류}
+        ImageAnal -.->|이미지 설명 텍스트| Router
+
+        %% ======================================
+        %% (A) 일반/법령 질문 (이미지 포함 가능)
+        %% ======================================
+        Router -->|일반 질문| General["general.py"]
+        Router -- "이미지 설명 + 질문" --> General
+        
+        General -->|Query Refinement| QueryRefine["질문 고도화"]
+        
+        %% ======================================
+        %% (B) 위험성 평가 (VLM & Text)
+        %% ======================================
+        Router -->|위험성 평가| RiskLogicBlock
+        
+        subgraph RiskLogicBlock ["위험성 평가 로직"]
+            %% 1. VLM 전용 로직
+            subgraph VLM_Logic ["vlm_risk.py (이미지 기반)"]
+                FindTask["세부작업 검색<br/>(FAISS)"]
+                SelectInd["최종 업종 선정<br/>(LLM)"]
+            end
+            
+            %% 2. 공통 Risk 로직 (risk.py)
+            subgraph Risk_Core ["risk.py (핵심 평가 엔진)"]
+                GenProc["공정 리스트 생성"]
+                Hazard["유해위험요인 도출"]
+                Measure["대책 수립 (RAG)"]
+                Scoring["KRAS 3x3 점수 산출"]
+            end
+
+            %% 연결 흐름 (User Flow 반영)
+            ImageAnal -->|이미지 설명| FindTask
+            FindTask --> SelectInd
+            
+            %% ★ 핵심: vlm_risk가 risk.py 함수 호출
+            SelectInd -->|확정된 업종명| GenProc
+            
+            %% Step 1 결과 -> 사용자 검증 -> Step 2 평가 (괄호 제거)
+            GenProc -->|공정 리스트| Worker
+            Worker -.->|UI 검증 - Step 1| User
+            User -.->|확정 요청 - Step 2| Hazard
+            
+            Hazard --> Measure --> Scoring
+        end
+
+        %% ======================================
+        %% (C) TBM 분석
+        %% ======================================
+        Router -->|TBM 음성| TBMMod["tbm.py"]
+        TBMMod -->|STT| Whisper["WhisperX (LoRA)"]
+        Whisper -->|교정 및 요약| Summary["LLM 요약"]
+    end
+
+    %% ==========================================
+    %% 4. RAG 검색 엔진
+    %% ==========================================
+    subgraph RAG_Engine ["RAG 엔진"]
+        QueryRefine & Measure -->|검색어| Retrieve["retrieve_bge.py"]
+        Retrieve <--> LawDB[("법령 DB")]
+        Retrieve -->|1차 결과| Reranker["재순위화 (Reranker)"]
+    end
+    
+    %% VLM용 DB
+    FindTask <--> TaskDB[("세부작업 DB")]
+
+    %% 데이터 연결
+    Reranker -->|법령 컨텍스트| General & Measure
+    General & Scoring & Summary -->|최종 결과 JSON| Worker
+    Worker -->|Polling 응답| UI
+
+    %% 스타일
+    style Infrastructure fill:#e3f2fd,stroke:#1565c0
+    style RAG_Engine fill:#fff3e0,stroke:#e65100
+    style VLM_Logic fill:#f3e5f5,stroke:#7b1fa2,stroke-dasharray: 5 5
+    style Risk_Core fill:#ffebee,stroke:#c62828
+    style GenProc stroke:#c62828,stroke-width:2px,fill:#ffcdd2
+    style General stroke:#2e7d32,stroke-width:2px
+```
+
+## ✨ 핵심 기능 상세 (Core Features)
+
+### 1. 지능형 법령 RAG
+* **쿼리 분리 전략**: 검색을 위한 '기계용 질문(Refined Query)'과 답변을 위한 '사용자 질문'을 분리하여 검색 정확도 극대화.
 본 시스템은 단일 GPU 용 질문(Refined Query)'과 답변을 위한 '사용자 질문'을 분리하여 검색 정확도 극대화.
 * **하이브리드 검색**: 정규표현식 기반의 조문 직접 매칭과 임베딩 기반의 의미 검색을 결합.
 * **2단계 재순위화**: FAISS로 추출된 후보군을 Cross-Encoder 기반의 Reranker로 재정렬하여 환각 방지.
@@ -22,6 +143,7 @@
 ### 2. KRAS 3x3 위험성평가 자동화
 * **KRAS 표준 매칭**: 사용자의 일상어를 산업안전보건공단(KRAS) 표준 업종 데이터와 벡터 매칭.
 * **사용자 검증 루프**: AI가 생성한 공정 리스트를 사용자가 웹 UI에서 직접 수정/추가/삭제한 후 평가를 진행하는 신뢰 중심 설계.
+* **정량적 스코어링**: 빈도(Likelihood)와 강도(Severity)를 LLM이 자동 산출하며, Batch Scoring 기법을 도입하여 처리 속도 300% 향상.
 * **정량적 스코어링**: 프롬프트 엔지니어링을 통한 빈도(Likelihood), 강도(Severity) 출력.
 
 ### 3. 멀티모달 현장 데이터 통합
