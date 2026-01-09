@@ -130,20 +130,21 @@ graph TD
     style Risk_Core fill:#ffebee,stroke:#c62828
     style GenProc stroke:#c62828,stroke-width:2px,fill:#ffcdd2
     style General stroke:#2e7d32,stroke-width:2px
+```
 
 ## ✨ 핵심 기능 상세 (Core Features)
 
-### 1. 지능형 법령 RAG (`general.py`, `retrieve_bge.py`)
+### 1. 지능형 법령 RAG
 * **쿼리 분리 전략**: 검색을 위한 '기계용 질문(Refined Query)'과 답변을 위한 '사용자 질문'을 분리하여 검색 정확도 극대화.
 * **하이브리드 검색**: 정규표현식 기반의 조문 직접 매칭과 임베딩 기반의 의미 검색을 결합.
 * **2단계 재순위화**: FAISS로 추출된 후보군을 Cross-Encoder 기반의 Reranker로 재정렬하여 환각(Hallucination) 방지.
 
-### 2. KRAS 3x3 위험성평가 자동화 (`risk.py`, `vlm_risk.py`)
+### 2. KRAS 3x3 위험성평가 자동화
 * **KRAS 표준 매칭**: 사용자의 일상어를 산업안전보건공단(KRAS) 표준 업종 데이터와 벡터 매칭.
 * **사용자 검증 루프**: AI가 생성한 공정 리스트를 사용자가 웹 UI에서 직접 수정/추가/삭제한 후 평가를 진행하는 신뢰 중심 설계.
 * **정량적 스코어링**: 빈도(Likelihood)와 강도(Severity)를 LLM이 자동 산출하며, Batch Scoring 기법을 도입하여 처리 속도 300% 향상.
 
-### 3. 멀티모달 현장 데이터 통합 (`image.py`, `tbm.py`)
+### 3. 멀티모달 현장 데이터 통합
 * **VLM 시각 인지**: 현장 사진 속 장비와 작업 상황을 분석하여 위험성평가의 초기 컨텍스트로 자동 주입.
 * **STT TBM 요약**: 현장 소음에 최적화된 LoRA 파인튜닝 WhisperX를 사용하여 안전 회의록을 자동 생성 및 요약.
 * **VRAM 최적화**: VLM 추론 시 LLM/STT 모델을 동적으로 해제하는 모델 스와핑(Model Swapping) 기술 적용.
